@@ -5,6 +5,7 @@ from scrapers.footballista import get_all_weekend_matches
 from scrapers.graphics import prepare_graphics
 from publishers.rutube import publish_stream
 from publishers.footballista import add_video_link_to_match
+from history import save_to_history
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,14 +60,16 @@ async def main():
                     # 2. Публикуем на Rutube
                     video_url = await publish_stream(context, match, cover_path)
 
-                    # 3. Вставляем ссылку на Footballista (если она успешно скопировалась)
+                    # 3. Вставляем ссылку на Footballista
                     if video_url and match.match_url:
                         await add_video_link_to_match(context, match.match_url, video_url)
-                    else:
-                        logger.warning("Пропущено добавление ссылки: URL видео пустой или нет ссылки на матч.")
+
+                    # === СОХРАНЯЕМ В ИСТОРИЮ УСПЕШНЫЙ МАТЧ ===
+                    save_to_history(match.stream_title, "rutube")
+                    # =========================================
 
                     success_count += 1
-                    logger.info(f"Матч {match.stream_title} полностью отработан!")
+                    logger.info(f"✅ Матч {match.stream_title} успешно отработан!")
                 except Exception as e:
                     logger.error(f"Ошибка при обработке '{match.stream_title}': {e}")
 
