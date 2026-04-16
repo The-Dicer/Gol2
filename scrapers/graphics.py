@@ -142,13 +142,21 @@ async def prepare_graphics(context, match_data) -> str:
         if "труд" in stadium_lower:
             color_position = 3
         elif "ясенево" in stadium_lower:
-            color_position = 9  # надеюсь с цветами угадал
+            color_position = 24
         elif "терехово" in stadium_lower:
-            color_position = 8
-        elif "конструктор" in stadium_lower or "дело спорта" in stadium_lower:
             color_position = 19
+        elif "конструктор" in stadium_lower or "дело спорта" in stadium_lower:
+            color_position = 13
         elif "тушино" in stadium_lower or "октябрь" in stadium_lower:
             color_position = 4
+        elif "братиславский" in stadium_lower:
+            color_position = 5
+        elif "торпедо" in stadium_lower:
+            color_position = 22
+        elif "олимпийская" in stadium_lower:
+            color_position = 9
+        elif "балашиха" in stadium_lower:
+            color_position = 15
 
         logger.info(f"Выбрана позиция цвета: {color_position}")
 

@@ -1,5 +1,5 @@
+import customtkinter as ctk
 import tkinter as tk
-from tkinter import scrolledtext, messagebox
 import threading
 import asyncio
 import logging
@@ -8,13 +8,16 @@ import os
 
 from main import fetch_matches_for_ui, process_selected_matches
 
+# Настройка внешнего вида (Темная тема, синие акценты)
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
 stop_event = None
 pipeline_task = None
 
-# Глобальные переменные для хранения состояния чекбоксов
 fetched_matches = []
 checkbox_vars = []
-select_all_var = None  # Переменная для чекбокса "Выбрать все"
+select_all_var = None
 
 
 class TextHandler(logging.Handler):
@@ -40,7 +43,8 @@ def launch_chrome():
         if not os.path.exists(chrome_path):
             chrome_path = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
         if not os.path.exists(chrome_path):
-            messagebox.showerror("Ошибка", "Chrome не найден!")
+            # В ctk нет messagebox из коробки, поэтому печатаем в лог
+            logging.error("Ошибка: Chrome не найден!")
             return
         profile_path = os.path.join(os.getcwd(), "chrome_debug_profile")
         os.makedirs(profile_path, exist_ok=True)
@@ -50,9 +54,9 @@ def launch_chrome():
         logging.error(f"Не удалось запустить Chrome: {e}")
 
 
-# АСИНХРОННЫЕ ОБЕРТКИ
+# ================= АСИНХРОННЫЕ ОБЕРТКИ =================
 
-def run_async_fetch(btn_fetch, btn_publish, inner_frame, canvas):
+def run_async_fetch(btn_fetch, btn_publish, scrollable_frame):
     global fetched_matches, checkbox_vars, select_all_var
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -62,7 +66,7 @@ def run_async_fetch(btn_fetch, btn_publish, inner_frame, canvas):
 
         def update_ui():
             # Очищаем старые чекбоксы, если они были
-            for widget in inner_frame.winfo_children():
+            for widget in scrollable_frame.winfo_children():
                 widget.destroy()
             checkbox_vars.clear()
 
@@ -71,37 +75,31 @@ def run_async_fetch(btn_fetch, btn_publish, inner_frame, canvas):
 
             select_all_var.set(True)  # Включаем "Выбрать все" по умолчанию
 
-            # Функция для обновления статуса главного чекбокса
             def update_master(*args):
                 all_checked = all(var.get() for var, _ in checkbox_vars)
                 select_all_var.set(all_checked)
 
             # Создаем новые чекбоксы
             for match in fetched_matches:
-                var = tk.BooleanVar(value=True)  # По умолчанию галочка стоит
-
-                # Привязываем слежку: если этот чекбокс изменится, проверяем "Выбрать все"
+                var = ctk.BooleanVar(value=True)
                 var.trace_add("write", update_master)
-
                 checkbox_vars.append((var, match))
 
-                # Текст галочки
                 cb_text = f"{match.match_date} | {match.team_home} - {match.team_away} (Тур {match.tour_number})"
-                cb = tk.Checkbutton(inner_frame, text=cb_text, variable=var, bg="white", font=("Arial", 10))
-                cb.pack(anchor="w", padx=5, pady=2)
+                # Используем чекбоксы ctk
+                cb = ctk.CTkCheckBox(scrollable_frame, text=cb_text, variable=var, font=("Arial", 14))
+                cb.pack(anchor="w", padx=10, pady=5)
 
-            inner_frame.update_idletasks()
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            btn_publish.config(state=tk.NORMAL)
+            btn_publish.configure(state=tk.NORMAL)
             logging.info("✅ Матчи загружены! Снимите галочки с лишних и нажмите '3. Опубликовать'.")
 
-        btn_fetch.after(0, update_ui)
+        scrollable_frame.after(0, update_ui)
 
     except Exception as e:
         logging.error(f"Ошибка при сборе матчей: {e}")
     finally:
         loop.close()
-        btn_fetch.after(0, lambda: btn_fetch.config(state=tk.NORMAL, text="2. Собрать расписание"))
+        btn_fetch.after(0, lambda: btn_fetch.configure(state=tk.NORMAL, text="2. Собрать расписание"))
 
 
 async def run_cancellable_publish(selected_matches):
@@ -126,14 +124,13 @@ def run_async_publish(selected_matches, btn_publish, btn_stop):
         loop.run_until_complete(run_cancellable_publish(selected_matches))
     finally:
         loop.close()
-        btn_publish.after(0, lambda: btn_publish.config(state=tk.NORMAL, text="3. Опубликовать выбранные"))
-        btn_stop.after(0, lambda: btn_stop.config(state=tk.DISABLED))
+        btn_publish.after(0, lambda: btn_publish.configure(state=tk.NORMAL, text="3. Опубликовать выбранные"))
+        btn_stop.after(0, lambda: btn_stop.configure(state=tk.DISABLED))
 
 
-# КНОПКИ УПРАВЛЕНИЯ
+# ================= КНОПКИ УПРАВЛЕНИЯ =================
 
 def toggle_all():
-    """Переключает все чекбоксы на основе главного 'Выбрать все'"""
     if not checkbox_vars:
         return
     state = select_all_var.get()
@@ -141,22 +138,21 @@ def toggle_all():
         var.set(state)
 
 
-def start_fetch(btn_fetch, btn_publish, inner_frame, canvas):
-    btn_fetch.config(state=tk.DISABLED, text="Идет сбор...")
-    btn_publish.config(state=tk.DISABLED)
-    threading.Thread(target=run_async_fetch, args=(btn_fetch, btn_publish, inner_frame, canvas), daemon=True).start()
+def start_fetch(btn_fetch, btn_publish, scrollable_frame):
+    btn_fetch.configure(state=tk.DISABLED, text="Идет сбор...")
+    btn_publish.configure(state=tk.DISABLED)
+    threading.Thread(target=run_async_fetch, args=(btn_fetch, btn_publish, scrollable_frame), daemon=True).start()
 
 
 def start_publish(btn_publish, btn_stop):
-    # Собираем только те матчи, у которых стоит галочка
     selected_matches = [match for var, match in checkbox_vars if var.get()]
 
     if not selected_matches:
         logging.warning("Вы не выбрали ни одного матча для публикации!")
         return
 
-    btn_publish.config(state=tk.DISABLED, text="Публикуем...")
-    btn_stop.config(state=tk.NORMAL)
+    btn_publish.configure(state=tk.DISABLED, text="Публикуем...")
+    btn_stop.configure(state=tk.NORMAL)
     threading.Thread(target=run_async_publish, args=(selected_matches, btn_publish, btn_stop), daemon=True).start()
 
 
@@ -167,81 +163,63 @@ def stop_automation():
         pipeline_task.get_loop().call_soon_threadsafe(pipeline_task.cancel)
 
 
-# ИНТЕРФЕЙС
+# ================= ИНТЕРФЕЙС =================
 
 def create_gui():
     global select_all_var
 
-    root = tk.Tk()
-    root.title("AFL Publisher")
-    root.geometry("900x800")
-    root.configure(bg="#f0f0f0")
+    # Меняем tk.Tk() на ctk.CTk()
+    app = ctk.CTk()
+    app.title("AFL Publisher")
+    app.geometry("900x800")
 
     try:
-        root.iconbitmap("icon.ico")
+        app.iconbitmap("icon.ico")
     except Exception:
         pass
 
-    # Инициализация переменной для "Выбрать все"
-    select_all_var = tk.BooleanVar(value=True)
+    select_all_var = ctk.BooleanVar(value=True)
 
-    tk.Label(root, text="Панель управления операторами AFL", font=("Arial", 16, "bold"), bg="#f0f0f0").pack(pady=10)
+    ctk.CTkLabel(app, text="Панель управления операторами AFL", font=("Arial", 20, "bold")).pack(pady=15)
 
-    tk.Button(root, text="1. Жмыяк (Открыть Chrome с портом 9222)", font=("Arial", 12), bg="#4CAF50", fg="white",
-              command=launch_chrome, width=50).pack(pady=5)
+    ctk.CTkButton(app, text="1. Жмыяк (Открыть Chrome с портом 9222)", font=("Arial", 14),
+                  fg_color="#2E7D32", hover_color="#1B5E20", height=40, command=launch_chrome).pack(pady=5, fill="x",
+                                                                                                    padx=20)
 
-    frame_controls = tk.Frame(root, bg="#f0f0f0")
-    frame_controls.pack(pady=10)
+    frame_controls = ctk.CTkFrame(app, fg_color="transparent")
+    frame_controls.pack(pady=10, fill="x", padx=20)
 
-    btn_fetch = tk.Button(frame_controls, text="2. Собрать расписание", font=("Arial", 12, "bold"), bg="#FF9800",
-                          fg="white", width=25)
-    btn_fetch.pack(side=tk.LEFT, padx=5)
+    btn_fetch = ctk.CTkButton(frame_controls, text="2. Собрать расписание", font=("Arial", 14, "bold"),
+                              fg_color="#F57C00", hover_color="#E65100", height=40)
+    btn_fetch.pack(side=tk.LEFT, padx=(0, 5), expand=True, fill="x")
 
-    btn_publish = tk.Button(frame_controls, text="3. Опубликовать выбранные", font=("Arial", 12, "bold"), bg="#008CBA",
-                            fg="white", width=25, state=tk.DISABLED)
-    btn_publish.pack(side=tk.LEFT, padx=5)
+    btn_publish = ctk.CTkButton(frame_controls, text="3. Опубликовать выбранные", font=("Arial", 14, "bold"), height=40,
+                                state=tk.DISABLED)
+    btn_publish.pack(side=tk.LEFT, padx=5, expand=True, fill="x")
 
-    btn_stop = tk.Button(frame_controls, text="СТОПЭ", font=("Arial", 12, "bold"), bg="#f44336", fg="white", width=10,
-                         state=tk.DISABLED, command=stop_automation)
-    btn_stop.pack(side=tk.LEFT, padx=5)
+    btn_stop = ctk.CTkButton(frame_controls, text="СТОПЭ", font=("Arial", 14, "bold"), fg_color="#D32F2F",
+                             hover_color="#C62828", height=40, width=100, state=tk.DISABLED, command=stop_automation)
+    btn_stop.pack(side=tk.LEFT, padx=(5, 0))
 
-    #  БЛОК С ЗАГОЛОВКОМ И ЧЕКБОКСОМ "ВЫБРАТЬ ВСЕ"
-    header_frame = tk.Frame(root, bg="#f0f0f0")
-    header_frame.pack(fill=tk.X, padx=20, pady=(10, 0))
+    # === БЛОК С ЗАГОЛОВКОМ И ЧЕКБОКСОМ "ВЫБРАТЬ ВСЕ" ===
+    header_frame = ctk.CTkFrame(app, fg_color="transparent")
+    header_frame.pack(fill=tk.X, padx=20, pady=(15, 5))
 
-    cb_select_all = tk.Checkbutton(header_frame, text="Выбрать все", font=("Arial", 10, "bold"), bg="#f0f0f0",
-                                   variable=select_all_var, command=toggle_all)
+
+    cb_select_all = ctk.CTkCheckBox(header_frame, text="Выбрать все", font=("Arial", 14, "bold"),
+                                    variable=select_all_var, command=toggle_all)
     cb_select_all.pack(side=tk.LEFT)
 
-    #  БЛОК ДЛЯ ЧЕКБОКСОВ С ПРОКРУТКОЙ И КОЛЕСИКОМ
-    list_frame = tk.Frame(root, bg="white", bd=2, relief=tk.SUNKEN)
-    list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 5))
+    # === ИДЕАЛЬНЫЙ СКРОЛЛИРУЕМЫЙ СПИСОК МАТЧЕЙ ===
+    # В ctk скролл, колесико и ползунок работают из коробки
+    scrollable_frame = ctk.CTkScrollableFrame(app, label_text="")
+    scrollable_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
 
-    canvas = tk.Canvas(list_frame, bg="white")
-    scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
-    inner_frame = tk.Frame(canvas, bg="white")
+    ctk.CTkLabel(app, text="Логи (Читаем):", font=("Arial", 14)).pack(anchor="w", padx=20, pady=(10, 0))
 
-    inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-    canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    # Обработка прокрутки колесика
-    def _on_mousewheel(event):
-        # Прокручиваем только если контент не помещается в окно
-        if canvas.bbox("all")[3] > canvas.winfo_height():
-            # event.delta отвечает за направление и силу прокрутки (в Windows обычно кратно 120)
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    # Привязываем прокрутку ко всем элементам внутри списка матчей
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-    tk.Label(root, text="Логи (Читаем):", font=("Arial", 10), bg="#f0f0f0").pack(anchor="w", padx=20)
-    log_console = scrolledtext.ScrolledText(root, state='disabled', height=12, bg="black", fg="lightgreen",
-                                            font=("Consolas", 10))
-    log_console.pack(padx=20, pady=5, fill=tk.BOTH, expand=False)
+    # Текстовое поле (TextBox) для логов
+    log_console = ctk.CTkTextbox(app, height=200, font=("Consolas", 14), text_color="#00FF00", fg_color="#1E1E1E")
+    log_console.pack(padx=20, pady=(5, 20), fill=tk.BOTH, expand=False)
 
     ui_handler = TextHandler(log_console)
     ui_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%H:%M:%S"))
@@ -249,10 +227,10 @@ def create_gui():
     logging.getLogger().setLevel(logging.INFO)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
 
-    btn_fetch.config(command=lambda: start_fetch(btn_fetch, btn_publish, inner_frame, canvas))
-    btn_publish.config(command=lambda: start_publish(btn_publish, btn_stop))
+    btn_fetch.configure(command=lambda: start_fetch(btn_fetch, btn_publish, scrollable_frame))
+    btn_publish.configure(command=lambda: start_publish(btn_publish, btn_stop))
 
-    root.mainloop()
+    app.mainloop()
 
 
 if __name__ == "__main__":
