@@ -5,20 +5,15 @@ import asyncio
 import logging
 import subprocess
 import os
+import urllib.request
 
 from main import fetch_matches_for_ui, process_selected_matches
 
-# Настройка внешнего вида (Темная тема, синие акценты)
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-stop_event = None
 pipeline_task = None
-
-fetched_matches = []
 checkbox_vars = []
-select_all_var = None
-pattern_var = None
 
 
 class TextHandler(logging.Handler):
@@ -38,212 +33,226 @@ class TextHandler(logging.Handler):
         self.text_widget.after(0, append)
 
 
+def is_chrome_running():
+    try:
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=1)
+        return True
+    except:
+        return False
+
+
 def launch_chrome():
     try:
         chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
         if not os.path.exists(chrome_path):
             chrome_path = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        if not os.path.exists(chrome_path):
-            # В ctk нет messagebox из коробки, поэтому печатаем в лог
-            logging.error("Ошибка: Chrome не найден!")
-            return
+
         profile_path = os.path.join(os.getcwd(), "chrome_debug_profile")
         os.makedirs(profile_path, exist_ok=True)
         subprocess.Popen([chrome_path, "--remote-debugging-port=9222", f"--user-data-dir={profile_path}"])
-        logging.info("Изолированный Chrome запущен! Авторизуйтесь на нужных сайтах.")
+        logging.info("Chrome запущен. Авторизуйтесь на нужных сайтах.")
     except Exception as e:
         logging.error(f"Не удалось запустить Chrome: {e}")
 
 
-# ================= АСИНХРОННЫЕ ОБЕРТКИ =================
+class AFLPublisherApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("AFL Publisher - PRO")
+        self.geometry("1100x800")
+        try:
+            self.iconbitmap("icon.ico")
+        except:
+            pass
 
-def run_async_fetch(btn_fetch, btn_publish, scrollable_frame):
-    global fetched_matches, checkbox_vars, select_all_var
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+        self.test_mode_var = ctk.BooleanVar(value=True)
+        self.pattern_var = ctk.StringVar(value="Автовыбор")
+        self.select_all_var = ctk.BooleanVar(value=True)
 
-    try:
-        fetched_matches = loop.run_until_complete(fetch_matches_for_ui())
+        self.last_browser_state = None
 
-        def update_ui():
-            # Очищаем старые чекбоксы, если они были
-            for widget in scrollable_frame.winfo_children():
-                widget.destroy()
-            checkbox_vars.clear()
+        self.build_ui()
+        self.check_browser_status()
 
-            if not fetched_matches:
-                return
+    def build_ui(self):
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-            select_all_var.set(True)  # Включаем "Выбрать все" по умолчанию
+        # Сайдбар
+        self.sidebar = ctk.CTkFrame(self, width=250, corner_radius=0)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid_rowconfigure(5, weight=1)
 
-            def update_master(*args):
-                all_checked = all(var.get() for var, _ in checkbox_vars)
-                select_all_var.set(all_checked)
+        ctk.CTkLabel(self.sidebar, text="Настройки", font=("Arial", 20, "bold")).pack(pady=(20, 10))
 
-            # Создаем новые чекбоксы
-            for match in fetched_matches:
-                var = ctk.BooleanVar(value=True)
-                var.trace_add("write", update_master)
-                checkbox_vars.append((var, match))
+        self.btn_chrome = ctk.CTkButton(self.sidebar, text="1. Запустить Chrome", fg_color="#2E7D32",
+                                        hover_color="#1B5E20", command=launch_chrome)
+        self.btn_chrome.pack(pady=10, padx=20, fill="x")
 
-                cb_text = f"{match.match_date} | {match.team_home} - {match.team_away} (Тур {match.tour_number})"
-                # Используем чекбоксы ctk
-                cb = ctk.CTkCheckBox(scrollable_frame, text=cb_text, variable=var, font=("Arial", 14))
-                cb.pack(anchor="w", padx=10, pady=5)
+        self.lbl_status = ctk.CTkLabel(self.sidebar, text="Браузер: Ожидание...", text_color="orange")
+        self.lbl_status.pack(pady=(0, 20))
 
-            btn_publish.configure(state=tk.NORMAL)
-            logging.info("✅ Матчи загружены! Снимите галочки с лишних и нажмите '3. Опубликовать'.")
+        ctk.CTkLabel(self.sidebar, text="Паттерн графики:").pack(anchor="w", padx=20)
+        ctk.CTkSegmentedButton(self.sidebar, variable=self.pattern_var, values=["Автовыбор", "1", "2"]).pack(pady=5,
+                                                                                                             padx=20,
+                                                                                                             fill="x")
 
-        scrollable_frame.after(0, update_ui)
+        self.switch_test = ctk.CTkSwitch(self.sidebar, text="Тестовый режим\n(без footballista)",
+                                         variable=self.test_mode_var, onvalue=True, offvalue=False)
+        self.switch_test.pack(pady=20, padx=20, anchor="w")
 
-    except Exception as e:
-        logging.error(f"Ошибка при сборе матчей: {e}")
-    finally:
-        loop.close()
-        btn_fetch.after(0, lambda: btn_fetch.configure(state=tk.NORMAL, text="2. Собрать расписание"))
+        bottom_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        bottom_frame.pack(side="bottom", fill="x", pady=20)
 
+        self.btn_publish = ctk.CTkButton(bottom_frame, text="ОПУБЛИКОВАТЬ", font=("Arial", 16, "bold"), height=50,
+                                         state="disabled", command=self.start_publish)
+        self.btn_publish.pack(pady=10, padx=20, fill="x")
 
-async def run_cancellable_publish(selected_matches, pattern_mode):
-    global pipeline_task
-    pipeline_task = asyncio.create_task(process_selected_matches(selected_matches, pattern_mode))
-    try:
-        await pipeline_task
-    except asyncio.CancelledError:
-        logging.warning("Процесс был принудительно остановлен пользователем!")
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "target closed" in error_msg or "econnrefused" in error_msg:
-            logging.error("СВЯЗЬ С БРАУЗЕРОМ ПОТЕРЯНА! Похоже, вы закрыли Chrome.")
-        else:
-            logging.error(f"Критическая ошибка: {e}")
+        self.btn_stop = ctk.CTkButton(bottom_frame, text="СТОП", fg_color="#D32F2F", hover_color="#C62828",
+                                      state="disabled", command=self.stop_automation)
+        self.btn_stop.pack(padx=20, fill="x")
 
+        # Главная панель
+        self.main_content = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_content.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
 
-def run_async_publish(selected_matches, btn_publish, btn_stop, pattern_mode):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(run_cancellable_publish(selected_matches, pattern_mode))
-    finally:
-        loop.close()
-        btn_publish.after(0, lambda: btn_publish.configure(state=tk.NORMAL, text="3. Опубликовать выбранные"))
-        btn_stop.after(0, lambda: btn_stop.configure(state=tk.DISABLED))
+        self.main_content.grid_columnconfigure(0, weight=1)
 
+        self.main_content.grid_rowconfigure(1, weight=3)
+        self.main_content.grid_rowconfigure(3, weight=1)
 
-# ================= КНОПКИ УПРАВЛЕНИЯ =================
+        header_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew")
 
-def toggle_all():
-    if not checkbox_vars:
-        return
-    state = select_all_var.get()
-    for var, _ in checkbox_vars:
-        var.set(state)
+        self.btn_fetch = ctk.CTkButton(header_frame, text="2. Собрать расписание", font=("Arial", 14, "bold"),
+                                       fg_color="#F57C00", hover_color="#E65100", height=40, state="disabled",
+                                       command=self.start_fetch)
+        self.btn_fetch.pack(side="left")
 
+        self.cb_select_all = ctk.CTkCheckBox(header_frame, text="Выбрать всё", variable=self.select_all_var,
+                                             command=self.toggle_all_matches)
+        self.cb_select_all.pack(side="right")
 
-def start_fetch(btn_fetch, btn_publish, scrollable_frame):
-    btn_fetch.configure(state=tk.DISABLED, text="Идет сбор...")
-    btn_publish.configure(state=tk.DISABLED)
-    threading.Thread(target=run_async_fetch, args=(btn_fetch, btn_publish, scrollable_frame), daemon=True).start()
+        self.scroll_matches = ctk.CTkScrollableFrame(self.main_content, label_text="Очередь матчей")
+        self.scroll_matches.grid(row=1, column=0, sticky="nsew", pady=(10, 20))
 
+        ctk.CTkLabel(self.main_content, text="Лог работы:", font=("Arial", 12, "bold")).grid(row=2, column=0,
+                                                                                             sticky="w")
+        self.log_console = ctk.CTkTextbox(self.main_content, font=("Consolas", 12), text_color="#A9B7C6",
+                                          fg_color="#1E1E1E")
+        self.log_console.grid(row=3, column=0, sticky="nsew")
 
-def start_publish(btn_publish, btn_stop):
-    selected_matches = [match for var, match in checkbox_vars if var.get()]
-    pattern_mode = pattern_var.get()  # <--- Добавляем эту строчку
+        ui_handler = TextHandler(self.log_console)
+        ui_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S"))
+        logging.getLogger().addHandler(ui_handler)
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("asyncio").setLevel(logging.WARNING)
 
-    if not selected_matches:
-        logging.warning("Вы не выбрали ни одного матча для публикации!")
-        return
+    def check_browser_status(self):
+        current_state = is_chrome_running()
 
-    btn_publish.configure(state=tk.DISABLED, text="Публикуем...")
-    btn_stop.configure(state=tk.NORMAL)
-    # Передаем pattern_mode в args:
-    threading.Thread(target=run_async_publish, args=(selected_matches, btn_publish, btn_stop, pattern_mode),
-                     daemon=True).start()
+        if current_state != self.last_browser_state:
+            self.last_browser_state = current_state
 
+            if current_state:
+                self.lbl_status.configure(text="Браузер: Подключен", text_color="#00FF00")
+                self.btn_fetch.configure(state="normal")
+            else:
+                self.lbl_status.configure(text="Браузер: Не найден", text_color="#FF5252")
+                self.btn_fetch.configure(state="disabled")
 
-def stop_automation():
-    global pipeline_task
-    if pipeline_task and not pipeline_task.done():
-        logging.info("Посылаем сигнал остановки... Ждем прерывания текущего шага.")
-        pipeline_task.get_loop().call_soon_threadsafe(pipeline_task.cancel)
+        self.after(2000, self.check_browser_status)
 
+    def toggle_all_matches(self):
+        state = self.select_all_var.get()
+        for var, _, _ in checkbox_vars:
+            var.set(state)
 
-# ================= ИНТЕРФЕЙС =================
+    def start_fetch(self):
+        self.btn_fetch.configure(state="disabled", text="Сбор...")
+        threading.Thread(target=self._run_async_fetch, daemon=True).start()
 
-def create_gui():
-    global select_all_var
-    global pattern_var
+    def _run_async_fetch(self):
+        global checkbox_vars
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            matches = loop.run_until_complete(fetch_matches_for_ui())
+            self.after(0, lambda: self._render_match_cards(matches))
+        except Exception as e:
+            logging.error(f"Ошибка сбора: {e}")
+        finally:
+            loop.close()
+            self.after(0, lambda: self.btn_fetch.configure(state="normal", text="2. Обновить расписание"))
 
-    # Меняем tk.Tk() на ctk.CTk()
-    app = ctk.CTk()
-    app.title("AFL Publisher")
-    app.geometry("900x800")
+    def _render_match_cards(self, matches):
+        global checkbox_vars
+        for widget in self.scroll_matches.winfo_children():
+            widget.destroy()
+        checkbox_vars.clear()
 
-    try:
-        app.iconbitmap("icon.ico")
-    except Exception:
-        pass
+        if not matches: return
 
-    select_all_var = ctk.BooleanVar(value=True)
-    pattern_var = ctk.StringVar(value="Автовыбор")
+        for match in matches:
+            card = ctk.CTkFrame(self.scroll_matches, fg_color="#2B2B2B", corner_radius=8)
+            card.pack(fill="x", pady=4, padx=5)
 
-    ctk.CTkLabel(app, text="Панель управления операторами AFL", font=("Arial", 20, "bold")).pack(pady=15)
+            var = ctk.BooleanVar(value=True)
+            cb = ctk.CTkCheckBox(card, text="", variable=var, width=20)
+            cb.pack(side="left", padx=10)
 
-    ctk.CTkButton(app, text="1. Жмяк (Открыть Chrome с портом 9222)", font=("Arial", 14),
-                  fg_color="#2E7D32", hover_color="#1B5E20", height=40, command=launch_chrome).pack(pady=5, fill="x",
-                                                                                                    padx=20)
+            info_frame = ctk.CTkFrame(card, fg_color="transparent")
+            info_frame.pack(side="left", fill="x", expand=True, padx=5, pady=5)
 
-    frame_controls = ctk.CTkFrame(app, fg_color="transparent")
-    frame_controls.pack(pady=10, fill="x", padx=20)
+            lbl_title = ctk.CTkLabel(info_frame, text=match.stream_title, font=("Arial", 14, "bold"), anchor="w")
+            lbl_title.pack(fill="x")
 
-    btn_fetch = ctk.CTkButton(frame_controls, text="2. Собрать расписание", font=("Arial", 14, "bold"),
-                              fg_color="#F57C00", hover_color="#E65100", height=40)
-    btn_fetch.pack(side=tk.LEFT, padx=(0, 5), expand=True, fill="x")
+            lbl_sub = ctk.CTkLabel(info_frame, text=f"{match.match_date} | Тур {match.tour_number} | {match.stadium}",
+                                   text_color="gray", anchor="w")
+            lbl_sub.pack(fill="x")
 
-    btn_publish = ctk.CTkButton(frame_controls, text="3. Опубликовать выбранные", font=("Arial", 14, "bold"), height=40,
-                                state=tk.DISABLED)
-    btn_publish.pack(side=tk.LEFT, padx=5, expand=True, fill="x")
+            checkbox_vars.append((var, match, card))
 
-    btn_stop = ctk.CTkButton(frame_controls, text="СТОПЭ", font=("Arial", 14, "bold"), fg_color="#D32F2F",
-                             hover_color="#C62828", height=40, width=100, state=tk.DISABLED, command=stop_automation)
-    btn_stop.pack(side=tk.LEFT, padx=(5, 0))
+        self.btn_publish.configure(state="normal")
+        logging.info("Матчи загружены. Проверьте список перед публикацией.")
 
-    # === БЛОК С ЗАГОЛОВКОМ И ЧЕКБОКСОМ "ВЫБРАТЬ ВСЕ" ===
-    header_frame = ctk.CTkFrame(app, fg_color="transparent")
-    header_frame.pack(fill=tk.X, padx=20, pady=(15, 5))
+    def start_publish(self):
+        selected = [m for var, m, _ in checkbox_vars if var.get()]
+        if not selected:
+            logging.warning("Нет выбранных матчей.")
+            return
 
-    cb_select_all = ctk.CTkCheckBox(header_frame, text="Выбрать все", font=("Arial", 14, "bold"),
-                                    variable=select_all_var, command=toggle_all)
-    cb_select_all.pack(side=tk.LEFT)
+        self.btn_publish.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
 
-    # --- Переключатель паттернов (прижат вправо) ---
-    pattern_segmented = ctk.CTkSegmentedButton(header_frame, variable=pattern_var,
-                                               values=["Автовыбор", "Паттерн 1", "Паттерн 2"])
-    pattern_segmented.pack(side=tk.RIGHT)
+        mode = self.pattern_var.get()
+        test = self.test_mode_var.get()
+        threading.Thread(target=self._run_async_publish, args=(selected, mode, test), daemon=True).start()
 
-    ctk.CTkLabel(header_frame, text="Паттерн:", font=("Arial", 14)).pack(side=tk.RIGHT, padx=(0, 10))
+    def _run_async_publish(self, selected_matches, pattern_mode, test_mode):
+        global pipeline_task
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        pipeline_task = loop.create_task(process_selected_matches(selected_matches, pattern_mode, test_mode))
 
-    # === ИДЕАЛЬНЫЙ СКРОЛЛИРУЕМЫЙ СПИСОК МАТЧЕЙ ===
-    # В ctk скролл, колесико и ползунок работают из коробки
-    scrollable_frame = ctk.CTkScrollableFrame(app, label_text="")
-    scrollable_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+        try:
+            loop.run_until_complete(pipeline_task)
+        except asyncio.CancelledError:
+            logging.warning("Остановлено пользователем.")
+        except Exception as e:
+            logging.error(f"Сбой публикации: {e}")
+        finally:
+            loop.close()
+            self.after(0, lambda: self.btn_publish.configure(state="normal"))
+            self.after(0, lambda: self.btn_stop.configure(state="disabled"))
 
-    ctk.CTkLabel(app, text="Логи (Читаем):", font=("Arial", 14)).pack(anchor="w", padx=20, pady=(10, 0))
-
-    # Текстовое поле (TextBox) для логов
-    log_console = ctk.CTkTextbox(app, height=200, font=("Consolas", 14), text_color="#00FF00", fg_color="#1E1E1E")
-    log_console.pack(padx=20, pady=(5, 20), fill=tk.BOTH, expand=False)
-
-    ui_handler = TextHandler(log_console)
-    ui_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%H:%M:%S"))
-    logging.getLogger().addHandler(ui_handler)
-    logging.getLogger().setLevel(logging.INFO)
-    logging.getLogger("asyncio").setLevel(logging.WARNING)
-
-    btn_fetch.configure(command=lambda: start_fetch(btn_fetch, btn_publish, scrollable_frame))
-    btn_publish.configure(command=lambda: start_publish(btn_publish, btn_stop))
-
-    app.mainloop()
+    def stop_automation(self):
+        global pipeline_task
+        if pipeline_task and not pipeline_task.done():
+            logging.info("Посылаем сигнал остановки...")
+            pipeline_task.get_loop().call_soon_threadsafe(pipeline_task.cancel)
 
 
 if __name__ == "__main__":
-    create_gui()
+    app = AFLPublisherApp()
+    app.mainloop()
