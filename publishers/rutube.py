@@ -78,7 +78,14 @@ async def publish_stream(context, match_data: MatchMetadata, cover_path: str) ->
         # Ждем прогрузки следующего шага
         await rutube_page.wait_for_timeout(2000)
 
-        # 4. ЗАГРУЗКА ОБЛОЖКИ
+        # 4. АВТОСТАРТ И СОХРАНЕНИЕ
+        logger.info("Включаем Автостарт...")
+        autostart_checkbox = rutube_page.locator("div[class*='autoStart__checkbox']").first
+        await autostart_checkbox.scroll_into_view_if_needed()
+        await autostart_checkbox.click()
+        await rutube_page.wait_for_timeout(500)
+
+        # 5. ЗАГРУЗКА ОБЛОЖКИ
         logger.info(f"Загружаем обложку: {cover_path}")
 
         # Правильный паттерн Playwright для загрузки файлов через кнопку
@@ -94,15 +101,8 @@ async def publish_stream(context, match_data: MatchMetadata, cover_path: str) ->
         await rutube_page.get_by_role("button", name="Готово").click()
         await rutube_page.wait_for_timeout(2000)
 
-        # 5. АВТОСТАРТ И СОХРАНЕНИЕ
-        logger.info("Включаем Автостарт...")
-        autostart_checkbox = rutube_page.locator("div[class*='autoStart__checkbox']").first
-        await autostart_checkbox.scroll_into_view_if_needed()
-        await autostart_checkbox.click()
-        await rutube_page.wait_for_timeout(500)
-
-        logger.info("Сохраняем трансляцию...")
-        await rutube_page.get_by_role("button", name="Сохранить").click()
+        # logger.info("Сохраняем трансляцию...")
+        # await rutube_page.get_by_role("button", name="Сохранить").click()
 
         # 6. СБОР ДАННЫХ СО СТРАНИЦЫ ПРЕДПРОСМОТРА
         logger.info("Ждем загрузки страницы предпросмотра...")

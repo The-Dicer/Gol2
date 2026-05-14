@@ -92,6 +92,11 @@ class AFLPublisherApp(ctk.CTk):
         self.lbl_status = ctk.CTkLabel(self.sidebar, text="Браузер: Ожидание...", text_color="orange")
         self.lbl_status.pack(pady=(0, 20))
 
+        self.btn_fetch = ctk.CTkButton(self.sidebar, text="2. Собрать расписание", font=("Arial", 14, "bold"),
+                                       fg_color="#F57C00", hover_color="#E65100", height=40, state="disabled",
+                                       command=self.start_fetch)
+        self.btn_fetch.pack(pady=(0, 20), padx=20, fill="x")
+
         ctk.CTkLabel(self.sidebar, text="Паттерн графики:").pack(anchor="w", padx=20)
         ctk.CTkSegmentedButton(self.sidebar, variable=self.pattern_var, values=["Автовыбор", "1", "2"]).pack(pady=5,
                                                                                                              padx=20,
@@ -124,16 +129,11 @@ class AFLPublisherApp(ctk.CTk):
         header_frame = ctk.CTkFrame(self.main_content, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew")
 
-        self.btn_fetch = ctk.CTkButton(header_frame, text="2. Собрать расписание", font=("Arial", 14, "bold"),
-                                       fg_color="#F57C00", hover_color="#E65100", height=40, state="disabled",
-                                       command=self.start_fetch)
-        self.btn_fetch.pack(side="left")
-
         self.cb_select_all = ctk.CTkCheckBox(header_frame, text="Выбрать всё", variable=self.select_all_var,
                                              command=self.toggle_all_matches)
-        self.cb_select_all.pack(side="right")
+        self.cb_select_all.pack(side="left", padx=5)
 
-        self.scroll_matches = ctk.CTkScrollableFrame(self.main_content, label_text="Очередь матчей")
+        self.scroll_matches = ctk.CTkScrollableFrame(self.main_content, label_text="Матчи")
         self.scroll_matches.grid(row=1, column=0, sticky="nsew", pady=(10, 20))
 
         ctk.CTkLabel(self.main_content, text="Лог работы:", font=("Arial", 12, "bold")).grid(row=2, column=0,

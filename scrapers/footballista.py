@@ -10,13 +10,26 @@ async def enrich_matches_from_compact_view(context, matches: List[MatchMetadata]
     logger.info("Открываем дополнительную вкладку Footballista в компактном режиме...")
     compact_page = await context.new_page()
     try:
-        await compact_page.set_viewport_size({"width": 900, "height": 900})
+        await compact_page.set_viewport_size({"width": 400, "height": 900})
         await compact_page.goto("https://footballista.ru/admin/games")
-        await compact_page.wait_for_load_state("domcontentloaded")
-        await compact_page.evaluate("document.body.style.zoom = '150%'")
-        await compact_page.wait_for_timeout(2500)
+
+        # ИСПРАВЛЕНИЕ 1: Ждем остановки сетевых запросов (сайт полностью скачал данные)
+        await compact_page.wait_for_load_state("networkidle", timeout=15000)
+
+        # ИСПРАВЛЕНИЕ 2: Защита от гонки. Ждем, пока в DOM появится хотя бы больше одной карточки
+        try:
+            await compact_page.wait_for_function(
+                'document.querySelectorAll("a[href^=\'/admin/games/\']").length > 1',
+                timeout=5000
+            )
+        except Exception:
+            pass  # Если матч реально один, просто идем дальше
+
+        await compact_page.wait_for_timeout(1000)  # Даем секунду на финальную перерисовку
 
         compact_cards = await compact_page.locator('a[href^="/admin/games/"]').all()
+        logger.info(f"Найдено карточек в мобильной версии: {len(compact_cards)}")
+
         compact_map: Dict[str, dict] = {}
 
         for card in compact_cards:
@@ -41,11 +54,23 @@ async def enrich_matches_from_compact_view(context, matches: List[MatchMetadata]
                         "/") else f"https://footballista.ru{raw_logo_away}".replace("-min", "-max")
 
                 name_text = await card.locator("div.name").inner_text()
-                name_text = re.sub(r"\s+", "", name_text.replace("\n", " ").replace("\r", " ")).strip().upper()
+                name_text = name_text.replace("\n", " ").replace("\r", " ").strip().upper()
 
-                short_match = re.search(r"([A-ZА-Я0-9]{2,8})-([A-ZА-Я0-9]{2,8})", name_text)
-                if short_match:
-                    abbr_home, abbr_away = short_match.group(1), short_match.group(2)
+                # ИСПРАВЛЕНИЕ 3: Вырезаем счет, чтобы аббревиатуры были чистыми ("VEL" вместо "VEL1")
+                parts = re.split(r'\s*\d+\s*-\s*\d+\s*', name_text)
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    abbr_home, abbr_away = parts[0].strip(), parts[1].strip()
+                else:
+                    # План Б: если счет еще не сыгран, делим просто по тире с пробелами
+                    fallback_parts = re.split(r'\s+-\s+', name_text)
+                    if len(fallback_parts) == 2:
+                        abbr_home, abbr_away = fallback_parts[0].strip(), fallback_parts[1].strip()
+                    else:
+                        # Запасной вариант (старая логика)
+                        clean_name = re.sub(r"\s+", "", name_text)
+                        short_match = re.search(r"([A-ZА-Я0-9]{2,8})-([A-ZА-Я0-9]{2,8})", clean_name)
+                        if short_match:
+                            abbr_home, abbr_away = short_match.group(1), short_match.group(2)
 
             compact_map[full_match_url] = {
                 "logo_home": logo_home, "logo_away": logo_away,
@@ -59,6 +84,15 @@ async def enrich_matches_from_compact_view(context, matches: List[MatchMetadata]
                 match.logo_away = extra["logo_away"]
                 match.abbr_home = extra["abbr_home"]
                 match.abbr_away = extra["abbr_away"]
+
+                if match.abbr_home and match.logo_home != "Нет логотипа":
+                    logger.info(f"Данные подтянуты: {match.abbr_home} vs {match.abbr_away}")
+                else:
+                    logger.warning(f"Частично нет лого/сокращений: {match.team_home} vs {match.team_away}")
+            else:
+                logger.warning(f"Матч не найден в мобильной версии: {match.team_home} vs {match.team_away}")
+
+        logger.info("Сбор дополнительных данных завершен.")
         return matches
     finally:
         await compact_page.close()
